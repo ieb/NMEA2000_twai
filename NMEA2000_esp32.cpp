@@ -5,6 +5,7 @@
 
 tNMEA2000_esp32::tNMEA2000_esp32(gpio_num_t TxPin, gpio_num_t RxPin, CAN_speed_t can_speed) : tNMEA2000(),
     is_open_(false),
+    _active(true),
     error_monitor_task_handle_(NULL),
     should_stop_error_monitor_(false) {
     switch (can_speed) {
@@ -57,9 +58,23 @@ bool tNMEA2000_esp32::CANOpen() {
     if (is_open_) return true;
     CAN_init();
     is_open_ = true;
+    _active = true;
     // Start error monitoring task
     xTaskCreate(errorMonitorTask, "TWAI_errMonitor", 4096, this, 5, &error_monitor_task_handle_);
     return true;
+}
+
+void tNMEA2000_esp32::Suspend() {
+    _active = false;
+    ESP_LOGI(TAG, "Suspending TWAI driver");
+    twai_stop();
+}
+
+void tNMEA2000_esp32::Resume() {
+    ESP_LOGI(TAG, "Resuming TWAI driver");
+    twai_start();
+    _active = true;
+    
 }
 
 void tNMEA2000_esp32::CAN_init() {
@@ -149,14 +164,16 @@ void tNMEA2000_esp32::errorMonitorTask(void *pvParameters) {
     twai_status_info_t status_info;
 
     while (!instance->should_stop_error_monitor_) {
-        if (twai_get_status_info(&status_info) == ESP_OK) {
-            if (status_info.state == TWAI_STATE_BUS_OFF) {
-                ESP_LOGE(TAG, "Bus-off condition detected");
-                instance->handleBusError();
-            } else if (status_info.tx_error_counter > 127 || status_info.rx_error_counter > 127) {
-                ESP_LOGW(TAG, "High error counters detected: TX=%ld, RX=%ld",
-                         status_info.tx_error_counter, status_info.rx_error_counter);
-            }
+        if (instance->_active) {
+            if (twai_get_status_info(&status_info) == ESP_OK) {
+                if (status_info.state == TWAI_STATE_BUS_OFF) {
+                    ESP_LOGE(TAG, "Bus-off condition detected");
+                    instance->handleBusError();
+                } else if (status_info.tx_error_counter > 127 || status_info.rx_error_counter > 127) {
+                    ESP_LOGW(TAG, "High error counters detected: TX=%ld, RX=%ld",
+                             status_info.tx_error_counter, status_info.rx_error_counter);
+                }
+            }            
         }
         vTaskDelay(pdMS_TO_TICKS(1000)); // Check every second
     }

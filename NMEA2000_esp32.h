@@ -22,6 +22,17 @@ public:
 
     //bool CANSendStandardFrame(unsigned long id, unsigned char len, const unsigned char *buf, bool wait_sent=false);
     
+    /**
+     * Suspend the can interface leaving the NMEA2000 stack as is
+     */ 
+    void Suspend();
+
+    /**
+     * Resume the CAN Interface resetting any counters
+     */ 
+    void Resume();
+
+
 protected:
     bool CANSendFrame(unsigned long id, unsigned char len, const unsigned char *buf, bool wait_sent) override;
 
@@ -30,6 +41,8 @@ protected:
     bool CANGetFrame(unsigned long &id, unsigned char &len, unsigned char *buf) override;
 
     void InitCANFrameBuffers() override;
+
+
 
 private:
     void CAN_init();
@@ -44,6 +57,7 @@ private:
     twai_filter_config_t f_config_;
     twai_general_config_t g_config_;
     bool is_open_;
+    bool _active;
     TaskHandle_t error_monitor_task_handle_;
     volatile bool should_stop_error_monitor_;
 };
