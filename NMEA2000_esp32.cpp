@@ -29,8 +29,15 @@ tNMEA2000_esp32::tNMEA2000_esp32(gpio_num_t TxPin, gpio_num_t RxPin, CAN_speed_t
     }
     f_config_ = TWAI_FILTER_CONFIG_ACCEPT_ALL();
     g_config_ = TWAI_GENERAL_CONFIG_DEFAULT(TxPin, RxPin, TWAI_MODE_NORMAL);
-    // I believe this should be set using menuconfig - otherwise bad things happen when trying ota over can
-    // g_config.intr_flags = ESP_INTR_FLAG_IRAM;
+    // Place the TWAI ISR in IRAM so it keeps running while flash cache is
+    // disabled (e.g. SPI flash writes, OTA, NVS commits). Without this the
+    // ISR can be delayed long enough to miss CAN bit timing and produce
+    // bus errors. Requires CONFIG_TWAI_ISR_IN_IRAM=y in sdkconfig.
+#ifdef CONFIG_TWAI_ISR_IN_IRAM
+    g_config_.intr_flags = ESP_INTR_FLAG_IRAM;
+#else
+#warning "CONFIG_TWAI_ISR_IN_IRAM not set in menuconfig - TWAI ISR will be delayed by flash-cache stalls"
+#endif
 }
 
 tNMEA2000_esp32::~tNMEA2000_esp32() {
@@ -127,6 +134,7 @@ bool tNMEA2000_esp32::CANSendStandardFrame(unsigned long id, unsigned char len, 
 }*/
     
 bool tNMEA2000_esp32::CANSendFrame(unsigned long id, unsigned char len, const unsigned char *buf, bool wait_sent) {
+    (void)wait_sent;
     twai_message_t message = {
 //        .extd = 1,
 //        .rtr = 0,
@@ -141,16 +149,18 @@ bool tNMEA2000_esp32::CANSendFrame(unsigned long id, unsigned char len, const un
         .data = {0}
     };
     memcpy(message.data, buf, message.data_length_code);
-    esp_err_t result = twai_transmit(&message, wait_sent ? pdMS_TO_TICKS(100) : 0);
-    if (result != ESP_OK) {
-        //ESP_LOGE(TAG, "Failed to transmit message: %s", esp_err_to_name(result));
-    }
+    // Never block on transmit. The TWAI driver has its own TX queue and the
+    // NMEA2000 layer maintains a send buffer above this. Blocking here
+    // (e.g. 100ms when wait_sent=true) stalls the NMEA2000 task, which
+    // means CANGetFrame stops being called and the RX queue overflows
+    // whenever the bus is faulty or in error-passive/bus-off recovery.
+    esp_err_t result = twai_transmit(&message, 0);
     return (result == ESP_OK);
 }
 
 bool tNMEA2000_esp32::CANGetFrame(unsigned long &id, unsigned char &len, unsigned char *buf) {
     twai_message_t message;
-    if (twai_receive(&message, pdMS_TO_TICKS(10)) == ESP_OK) {
+    if (twai_receive(&message, 0) == ESP_OK) {
         id = message.identifier;
         len = message.data_length_code;
         memcpy(buf, message.data, len);
